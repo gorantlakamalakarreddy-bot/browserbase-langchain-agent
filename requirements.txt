@@ -1,0 +1,7 @@
+browserbase
+stagehand
+langchain-community
+langchain-openai
+langgraph
+python-dotenv
+beautifulsoup4
