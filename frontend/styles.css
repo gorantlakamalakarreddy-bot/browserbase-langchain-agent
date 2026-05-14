@@ -1,0 +1,71 @@
+/* Custom styles — Tailwind CDN handles the rest */
+
+/* Markdown prose */
+.prose h1, .prose h2, .prose h3 { font-weight: 600; margin: 0.75em 0 0.4em; }
+.prose h1 { font-size: 1.2em; }
+.prose h2 { font-size: 1.05em; }
+.prose h3 { font-size: 0.95em; }
+.prose p  { margin: 0.5em 0; }
+.prose ul, .prose ol { padding-left: 1.4em; margin: 0.5em 0; }
+.prose li { margin: 0.2em 0; }
+.prose a  { color: #4f46e5; text-decoration: underline; }
+.prose a:hover { color: #4338ca; }
+.prose code {
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 0.1em 0.4em;
+  font-size: 0.85em;
+  font-family: 'Fira Code', 'Cascadia Code', monospace;
+}
+.prose pre {
+  background: #1e293b;
+  color: #e2e8f0;
+  border-radius: 0.5rem;
+  padding: 1rem;
+  overflow-x: auto;
+  margin: 0.75em 0;
+}
+.prose pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font-size: 0.82em;
+}
+.prose table { border-collapse: collapse; width: 100%; margin: 0.75em 0; font-size: 0.85em; }
+.prose th { background: #f8fafc; font-weight: 600; }
+.prose th, .prose td { border: 1px solid #e2e8f0; padding: 0.4em 0.75em; }
+.prose blockquote {
+  border-left: 3px solid #6366f1;
+  padding-left: 0.75em;
+  color: #64748b;
+  margin: 0.5em 0;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar       { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+/* Textarea auto-grow */
+textarea { min-height: 44px; max-height: 200px; }
+
+/* Tool badge animation */
+.tool-badge { animation: fadein 0.2s ease; }
+@keyframes fadein { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: scale(1); } }
+
+/* Agent bubble typing cursor */
+.agent-body:not(:empty)::after {
+  content: '';
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: #6366f1;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: blink 0.7s steps(1) infinite;
+}
+.agent-body.done::after { display: none; }
+@keyframes blink { 50% { opacity: 0; } }
