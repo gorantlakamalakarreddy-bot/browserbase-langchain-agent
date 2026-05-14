@@ -3,12 +3,11 @@ Unit tests for the API layer — FastAPI test client, no real LLM calls.
 Run:  pytest tests/test_agent.py
 """
 
-import sys
 import os
+import sys
+from unittest.mock import MagicMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 

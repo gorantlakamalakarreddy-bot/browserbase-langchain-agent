@@ -3,11 +3,9 @@ Unit tests for browser tools — all Browserbase/Stagehand clients are mocked.
 Run:  pytest tests/test_tools.py
 """
 
-import sys
 import os
+import sys
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -94,9 +92,12 @@ def test_fetch_truncates_at_max_chars():
 # ── browserbase_rendered_extract ─────────────────────────────────────────────
 
 def test_rendered_extract_calls_stagehand_and_releases_session():
-    bb_session = MagicMock(); bb_session.id = "bb-123"
-    sh_resp    = MagicMock(); sh_resp.data.session_id = "sh-456"
-    extract    = MagicMock(); extract.data.result = "Extracted content"
+    bb_session = MagicMock()
+    bb_session.id = "bb-123"
+    sh_resp = MagicMock()
+    sh_resp.data.session_id = "sh-456"
+    extract = MagicMock()
+    extract.data.result = "Extracted content"
 
     with patch("browser_agent.tools._bb") as mock_bb, \
          patch("browser_agent.tools._new_stagehand") as mock_sh_factory:

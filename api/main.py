@@ -11,8 +11,8 @@ Endpoints:
 from __future__ import annotations
 
 import json
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from langgraph.types import Command
 
 from api.models import ApproveRequest, ChatRequest
-from browser_agent.agent import agent, extract_final_message
+from browser_agent.agent import agent
 from browser_agent.logger import get_logger
 
 log = get_logger("api")

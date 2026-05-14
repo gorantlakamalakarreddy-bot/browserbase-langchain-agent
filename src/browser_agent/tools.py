@@ -12,8 +12,8 @@ from __future__ import annotations
 import re
 import time
 
-from bs4 import BeautifulSoup
 from browserbase import Browserbase
+from bs4 import BeautifulSoup
 from langchain_core.tools import tool
 from langgraph.types import interrupt
 from stagehand import Stagehand
