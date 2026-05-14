@@ -1,10 +1,10 @@
 /* Browserbase Web Agent — frontend application */
 
 const TOOL_META = {
-  browserbase_search:           { label: 'Search',   color: 'blue',  icon: '&#x1F50D;' },
-  browserbase_fetch:            { label: 'Fetch',    color: 'green', icon: '&#x1F4C4;' },
-  browserbase_rendered_extract: { label: 'Render',   color: 'amber', icon: '&#x1F5A5;' },
-  browserbase_interactive_task: { label: 'Interact', color: 'red',   icon: '&#x1F916;' },
+  browserbase_search:           { label: 'Search',   color: 'blue',  icon: '🔍' },
+  browserbase_fetch:            { label: 'Read',     color: 'green', icon: '📄' },
+  browserbase_rendered_extract: { label: 'Render',   color: 'amber', icon: '🖥️' },
+  browserbase_interactive_task: { label: 'Interact', color: 'red',   icon: '🤖' },
 };
 
 const TOOL_COLORS = {
@@ -14,24 +14,65 @@ const TOOL_COLORS = {
   red:   'bg-red-100 text-red-700 border-red-200',
 };
 
+// Pool of example prompts — one per category is picked each session
+const SUGGESTIONS = [
+  // Search — web research & fact finding
+  { category: 'Search', color: 'blue', icon: '🔍',
+    text: 'What are the top Python web scraping libraries in 2026?' },
+  { category: 'Search', color: 'blue', icon: '🔍',
+    text: "What's new in the latest React release and should I upgrade?" },
+  { category: 'Search', color: 'blue', icon: '🔍',
+    text: 'Compare the leading AI agent frameworks available today' },
+
+  // Read — fetch full page text
+  { category: 'Read', color: 'green', icon: '📄',
+    text: 'Summarise the LangChain documentation home page' },
+  { category: 'Read', color: 'green', icon: '📄',
+    text: 'What does the FastAPI docs say about dependency injection?' },
+  { category: 'Read', color: 'green', icon: '📄',
+    text: 'Read the Anthropic blog and tell me the latest post' },
+
+  // Render — extract content from JS-heavy pages
+  { category: 'Render', color: 'amber', icon: '🖥️',
+    text: 'What is the current Browserbase pricing?' },
+  { category: 'Render', color: 'amber', icon: '🖥️',
+    text: 'List all features shown on the Vercel homepage' },
+  { category: 'Render', color: 'amber', icon: '🖥️',
+    text: 'What plans does Supabase offer and what are the limits?' },
+
+  // Interact — click, navigate, fill forms
+  { category: 'Interact', color: 'red', icon: '🤖',
+    text: 'Find the latest LangGraph release notes on GitHub' },
+  { category: 'Interact', color: 'red', icon: '🤖',
+    text: 'Search Hacker News for "AI agents" and summarise the top thread' },
+  { category: 'Interact', color: 'red', icon: '🤖',
+    text: 'Go to the Python Package Index and find the most downloaded package this month' },
+];
+
+const BADGE_COLORS = {
+  blue:  'bg-blue-100 text-blue-700',
+  green: 'bg-green-100 text-green-700',
+  amber: 'bg-amber-100 text-amber-700',
+  red:   'bg-red-100 text-red-700',
+};
+
 const MAX_MSG_LEN = 10_000;
 
 const App = (() => {
-  // Each session gets a unique thread ID — prevents shared history across page reloads
-  let threadId       = 'session-' + Date.now();
-  let msgCount       = 0;
-  let busy           = false;
+  let threadId        = 'session-' + Date.now();
+  let msgCount        = 0;
+  let busy            = false;
   let pendingApproval = null;
-  let currentAgentEl = null;
+  let currentAgentEl  = null;
   let currentAgentText = '';
-  let activeTools    = new Set();
-  let currentAbort   = null;   // AbortController for the live fetch
+  let activeTools     = new Set();
+  let currentAbort    = null;
 
   // ── Init ──────────────────────────────────────────────────────────────────
   function init() {
     marked.setOptions({ breaks: true, gfm: true });
-    document.getElementById('thread-id-label').textContent = threadId;
-    // Fetch model name from health endpoint
+    _syncThreadLabel();
+    renderSuggestions();
     fetch('/api/health')
       .then(r => r.ok ? r.json() : null)
       .then(data => {
@@ -42,37 +83,90 @@ const App = (() => {
       .catch(() => {});
   }
 
+  // ── Dynamic suggestion rendering ─────────────────────────────────────────
+  function renderSuggestions() {
+    const grid = document.getElementById('suggestions-grid');
+    if (!grid) return;
+
+    // Pick one from each category, randomised within each pool
+    const categories = ['Search', 'Read', 'Render', 'Interact'];
+    const picked = categories.map(cat => {
+      const pool = SUGGESTIONS.filter(s => s.category === cat);
+      return pool[Math.floor(Math.random() * pool.length)];
+    });
+
+    grid.innerHTML = picked.map(s => `
+      <button
+        data-prompt="${escapeHtml(s.text)}"
+        onclick="App.suggest(this)"
+        class="suggest-btn group text-left px-4 py-3.5 rounded-xl border border-slate-200 bg-white
+               hover:border-brand-500 hover:bg-brand-50 hover:shadow-sm transition-all duration-150"
+      >
+        <span class="inline-flex items-center gap-1.5 text-xs font-semibold px-2 py-0.5 rounded-full ${BADGE_COLORS[s.color]} mb-2">
+          ${s.icon} ${s.category}
+        </span>
+        <p class="text-sm text-slate-600 group-hover:text-slate-800 leading-snug">${escapeHtml(s.text)}</p>
+      </button>
+    `).join('');
+  }
+
   // ── New session ───────────────────────────────────────────────────────────
   function newSession() {
     if (currentAbort) { currentAbort.abort(); currentAbort = null; }
     threadId = 'session-' + Date.now();
     msgCount = 0;
-    currentAgentEl = null;
+    currentAgentEl   = null;
     currentAgentText = '';
     activeTools.clear();
     busy = false;
 
-    const chat = document.getElementById('chat');
-    chat.innerHTML = '';
+    document.getElementById('chat').innerHTML = '';
     document.getElementById('msg-count').textContent = '0';
-    document.getElementById('thread-id-label').textContent = threadId;
     document.getElementById('tool-log').innerHTML = '';
     document.getElementById('send-btn').disabled = false;
     document.getElementById('input').disabled = false;
+    _syncThreadLabel();
 
-    const welcome = buildWelcome();
-    chat.appendChild(welcome);
+    document.getElementById('chat').appendChild(buildWelcome());
+    renderSuggestions();
     setStatus('Ready');
   }
 
   function buildWelcome() {
     const d = document.createElement('div');
     d.id = 'welcome';
-    d.className = 'flex flex-col items-center justify-center h-full text-center py-16';
+    d.className = 'flex flex-col items-center justify-center min-h-full text-center py-10 px-4';
     d.innerHTML = `
-      <div class="w-16 h-16 rounded-2xl bg-brand-500 flex items-center justify-center text-white text-2xl font-bold mb-4">BB</div>
-      <h2 class="text-xl font-semibold text-slate-800 mb-2">Browserbase Web Agent</h2>
-      <p class="text-slate-500 text-sm max-w-md">Ask me to research any topic, read websites, or interact with web pages.</p>
+      <div class="w-16 h-16 rounded-2xl bg-brand-500 flex items-center justify-center text-white text-2xl font-bold mb-4 shadow-lg shadow-brand-500/20">BB</div>
+      <h2 class="text-xl font-semibold text-slate-800 mb-1.5">Browserbase Web Agent</h2>
+      <p class="text-slate-500 text-sm max-w-sm leading-relaxed">
+        Powered by Browserbase + LangGraph. Ask me to research topics, read websites,
+        extract data from JavaScript-heavy pages, or interact with web apps.
+      </p>
+      <div class="mt-7 grid grid-cols-2 sm:grid-cols-4 gap-3 w-full max-w-2xl">
+        <div class="capability-card bg-blue-50 border border-blue-100">
+          <span class="text-xl mb-1">🔍</span>
+          <span class="text-xs font-semibold text-blue-700">Search</span>
+          <span class="text-xs text-blue-500/80 leading-tight">Web research &amp;<br>fact finding</span>
+        </div>
+        <div class="capability-card bg-green-50 border border-green-100">
+          <span class="text-xl mb-1">📄</span>
+          <span class="text-xs font-semibold text-green-700">Read</span>
+          <span class="text-xs text-green-500/80 leading-tight">Fetch any page's<br>full content</span>
+        </div>
+        <div class="capability-card bg-amber-50 border border-amber-100">
+          <span class="text-xl mb-1">🖥️</span>
+          <span class="text-xs font-semibold text-amber-700">Render</span>
+          <span class="text-xs text-amber-500/80 leading-tight">Extract JS-rendered<br>site content</span>
+        </div>
+        <div class="capability-card bg-red-50 border border-red-100">
+          <span class="text-xl mb-1">🤖</span>
+          <span class="text-xs font-semibold text-red-700">Interact</span>
+          <span class="text-xs text-red-500/80 leading-tight">Click, type &amp;<br>fill forms</span>
+        </div>
+      </div>
+      <p class="mt-8 text-xs font-semibold uppercase tracking-widest text-slate-400 mb-3">Try asking</p>
+      <div id="suggestions-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-2xl"></div>
     `;
     return d;
   }
@@ -120,9 +214,7 @@ const App = (() => {
       signal:  currentAbort.signal,
     });
 
-    if (!res.ok) {
-      throw new Error(`Server error ${res.status}`);
-    }
+    if (!res.ok) throw new Error(`Server error ${res.status}`);
 
     const reader  = res.body.getReader();
     const decoder = new TextDecoder();
@@ -147,32 +239,32 @@ const App = (() => {
   // ── Event router ─────────────────────────────────────────────────────────
   function handleEvent(ev) {
     switch (ev.type) {
-      case 'tool_start':      onToolStart(ev.tool);       break;
-      case 'tool_end':        onToolEnd(ev.tool);         break;
-      case 'token':           onToken(ev.content);        break;
+      case 'tool_start':        onToolStart(ev.tool);       break;
+      case 'tool_end':          onToolEnd(ev.tool);         break;
+      case 'token':             onToken(ev.content);        break;
       case 'approval_required': pendingApproval = ev; showApprovalModal(ev); break;
-      case 'done':            onDone(ev.content);         break;
-      case 'error':           appendSystemMessage('Agent error: ' + (ev.message || 'unknown')); break;
+      case 'done':              onDone(ev.content);         break;
+      case 'error':             appendSystemMessage('Agent error: ' + (ev.message || 'unknown')); break;
     }
   }
 
   // ── Tool events ───────────────────────────────────────────────────────────
   function onToolStart(tool) {
     activeTools.add(tool);
-    const meta = TOOL_META[tool] || { label: tool, color: 'blue', icon: '&#x2699;' };
+    const meta = TOOL_META[tool] || { label: tool, color: 'blue', icon: '⚙️' };
 
-    // Sidebar
+    // Sidebar entry — replace if already present
     const existing = document.getElementById('tool-entry-' + tool);
     if (existing) existing.remove();
     const entry = document.createElement('div');
     entry.id = 'tool-entry-' + tool;
-    entry.className = 'flex items-center gap-2 py-1.5 px-2 rounded-lg bg-slate-800';
+    entry.className = 'flex items-center gap-2 py-1.5 px-2.5 rounded-lg bg-slate-800';
     entry.innerHTML =
       `<span class="tool-dot-${tool} animate-pulse w-1.5 h-1.5 rounded-full bg-${meta.color === 'amber' ? 'amber' : meta.color}-400 flex-shrink-0"></span>` +
       `<span class="text-slate-300">${meta.icon} ${escapeHtml(meta.label)}</span>`;
     document.getElementById('tool-log').prepend(entry);
 
-    // Inline badge
+    // Inline badge in agent bubble
     ensureAgentBubble();
     const badge = document.createElement('span');
     badge.className = `tool-badge inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border mr-1 mb-1 ${TOOL_COLORS[meta.color] || TOOL_COLORS.blue}`;
@@ -241,8 +333,8 @@ const App = (() => {
     if (!pendingApproval) return;
 
     const editVal = document.getElementById('modal-edit').value.trim();
-    const body = { decision, task: editVal || pendingApproval.task || '' };
-    const tid  = pendingApproval.thread_id;
+    const body    = { decision, task: editVal || pendingApproval.task || '' };
+    const tid     = pendingApproval.thread_id;
     pendingApproval = null;
     setBusy(true);
 
@@ -279,7 +371,7 @@ const App = (() => {
     el.innerHTML =
       `<div class="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center text-brand-600 font-bold text-xs flex-shrink-0 mt-1" aria-hidden="true">AI</div>` +
       `<div class="flex-1 min-w-0">` +
-        `<div class="tool-badges flex flex-wrap mb-2"></div>` +
+        `<div class="tool-badges flex flex-wrap mb-1.5"></div>` +
         `<div class="agent-body prose prose-sm max-w-none text-slate-800 bg-white rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm border border-slate-100 leading-relaxed"></div>` +
       `</div>`;
     document.getElementById('chat').appendChild(el);
@@ -309,6 +401,13 @@ const App = (() => {
     document.getElementById('header-status').innerHTML = `${dot} ${escapeHtml(text)}`;
   }
 
+  function _syncThreadLabel() {
+    const short = threadId.replace('session-', '').slice(-8);
+    document.getElementById('thread-id-label').textContent = threadId;
+    const h = document.getElementById('header-thread');
+    if (h) h.textContent = '#' + short;
+  }
+
   function scrollToBottom() {
     const chat = document.getElementById('chat');
     requestAnimationFrame(() => { chat.scrollTop = chat.scrollHeight; });
@@ -324,7 +423,7 @@ const App = (() => {
   }
 
   function suggest(btn) {
-    const text = btn.textContent.trim();
+    const text = btn.dataset.prompt || btn.textContent.trim();
     document.getElementById('input').value = text;
     autoResize(document.getElementById('input'));
     send();

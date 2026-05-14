@@ -52,9 +52,29 @@
 /* Textarea auto-grow */
 textarea { min-height: 44px; max-height: 200px; }
 
+/* Capability cards on welcome screen */
+.capability-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 0.75rem 0.5rem;
+  border-radius: 0.75rem;
+  text-align: center;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.capability-card:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+
+/* Suggestion card */
+.suggest-btn:focus-visible { outline: 2px solid #6366f1; outline-offset: 2px; }
+
 /* Tool badge animation */
 .tool-badge { animation: fadein 0.2s ease; }
 @keyframes fadein { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: scale(1); } }
+
+/* Modal entrance */
+.animate-modal { animation: modal-in 0.18s cubic-bezier(0.16,1,0.3,1); }
+@keyframes modal-in { from { opacity: 0; transform: scale(0.96) translateY(6px); } to { opacity: 1; transform: scale(1) translateY(0); } }
 
 /* Agent bubble typing cursor */
 .agent-body:not(:empty)::after {
