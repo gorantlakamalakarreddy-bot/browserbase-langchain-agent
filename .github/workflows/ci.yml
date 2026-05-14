@@ -9,23 +9,35 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11"]
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
           cache: pip
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev]" pytest-cov
+
+      - name: Format check (ruff)
+        run: ruff format --check src/ api/ tests/
 
       - name: Lint (ruff)
         run: ruff check src/ api/ tests/
 
-      - name: Unit tests
+      - name: Unit tests with coverage
         env:
-          BROWSERBASE_API_KEY: test-key
+          BROWSERBASE_API_KEY: bb_live_test
           BROWSERBASE_PROJECT_ID: test-project
           OPENAI_API_KEY: test-openai
-        run: pytest tests/ -v --tb=short
+        run: |
+          pytest tests/ -v --tb=short \
+            --cov=src/browser_agent \
+            --cov=api \
+            --cov-report=term-missing \
+            --cov-fail-under=60

@@ -1,10 +1,10 @@
 /* Browserbase Web Agent — frontend application */
 
 const TOOL_META = {
-  browserbase_search:           { label: 'Search',    color: 'blue',   icon: '🔍' },
-  browserbase_fetch:            { label: 'Fetch',     color: 'green',  icon: '📄' },
-  browserbase_rendered_extract: { label: 'Render',    color: 'amber',  icon: '🖥️' },
-  browserbase_interactive_task: { label: 'Interact',  color: 'red',    icon: '🤖' },
+  browserbase_search:           { label: 'Search',   color: 'blue',  icon: '&#x1F50D;' },
+  browserbase_fetch:            { label: 'Fetch',    color: 'green', icon: '&#x1F4C4;' },
+  browserbase_rendered_extract: { label: 'Render',   color: 'amber', icon: '&#x1F5A5;' },
+  browserbase_interactive_task: { label: 'Interact', color: 'red',   icon: '&#x1F916;' },
 };
 
 const TOOL_COLORS = {
@@ -14,45 +14,79 @@ const TOOL_COLORS = {
   red:   'bg-red-100 text-red-700 border-red-200',
 };
 
-const App = (() => {
-  let threadId    = 'default';
-  let msgCount    = 0;
-  let busy        = false;
-  let pendingApproval = null;    // { thread_id, url, task }
-  let currentAgentEl = null;    // current streaming agent bubble
-  let currentAgentText = '';    // accumulated markdown text
-  let activeTools = new Set();
+const MAX_MSG_LEN = 10_000;
 
-  // ── Initialise ────────────────────────────────────────────────────────────
+const App = (() => {
+  // Each session gets a unique thread ID — prevents shared history across page reloads
+  let threadId       = 'session-' + Date.now();
+  let msgCount       = 0;
+  let busy           = false;
+  let pendingApproval = null;
+  let currentAgentEl = null;
+  let currentAgentText = '';
+  let activeTools    = new Set();
+  let currentAbort   = null;   // AbortController for the live fetch
+
+  // ── Init ──────────────────────────────────────────────────────────────────
   function init() {
     marked.setOptions({ breaks: true, gfm: true });
-    document.getElementById('model-label').textContent =
-      document.title.includes('gpt') ? 'gpt-4o' : 'gpt-4o';
     document.getElementById('thread-id-label').textContent = threadId;
+    // Fetch model name from health endpoint
+    fetch('/api/health')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data && data.model) {
+          document.getElementById('model-label').textContent = data.model;
+        }
+      })
+      .catch(() => {});
   }
 
   // ── New session ───────────────────────────────────────────────────────────
   function newSession() {
+    if (currentAbort) { currentAbort.abort(); currentAbort = null; }
     threadId = 'session-' + Date.now();
     msgCount = 0;
     currentAgentEl = null;
     currentAgentText = '';
     activeTools.clear();
-    document.getElementById('chat').innerHTML = '';
+    busy = false;
+
+    const chat = document.getElementById('chat');
+    chat.innerHTML = '';
     document.getElementById('msg-count').textContent = '0';
     document.getElementById('thread-id-label').textContent = threadId;
     document.getElementById('tool-log').innerHTML = '';
-    document.getElementById('welcome').style.display = '';
-    document.getElementById('chat').appendChild(document.getElementById('welcome'));
-    document.getElementById('welcome').classList.remove('hidden');
+    document.getElementById('send-btn').disabled = false;
+    document.getElementById('input').disabled = false;
+
+    const welcome = buildWelcome();
+    chat.appendChild(welcome);
+    setStatus('Ready');
   }
 
-  // ── Send message ──────────────────────────────────────────────────────────
+  function buildWelcome() {
+    const d = document.createElement('div');
+    d.id = 'welcome';
+    d.className = 'flex flex-col items-center justify-center h-full text-center py-16';
+    d.innerHTML = `
+      <div class="w-16 h-16 rounded-2xl bg-brand-500 flex items-center justify-center text-white text-2xl font-bold mb-4">BB</div>
+      <h2 class="text-xl font-semibold text-slate-800 mb-2">Browserbase Web Agent</h2>
+      <p class="text-slate-500 text-sm max-w-md">Ask me to research any topic, read websites, or interact with web pages.</p>
+    `;
+    return d;
+  }
+
+  // ── Send ──────────────────────────────────────────────────────────────────
   async function send() {
     if (busy) return;
     const input = document.getElementById('input');
     const text  = input.value.trim();
     if (!text) return;
+    if (text.length > MAX_MSG_LEN) {
+      appendSystemMessage('Message too long (max 10,000 characters).');
+      return;
+    }
 
     hideWelcome();
     input.value = '';
@@ -63,25 +97,31 @@ const App = (() => {
     try {
       await streamRequest('/api/chat', { message: text, thread_id: threadId });
     } catch (err) {
-      appendSystemMessage('Connection error: ' + err.message);
+      if (err.name !== 'AbortError') {
+        appendSystemMessage('Connection error: ' + err.message);
+      }
     } finally {
       setBusy(false);
     }
   }
 
-  // ── Stream a request, parse SSE ───────────────────────────────────────────
+  // ── SSE stream ────────────────────────────────────────────────────────────
   async function streamRequest(url, body) {
     currentAgentEl   = null;
     currentAgentText = '';
 
+    if (currentAbort) currentAbort.abort();
+    currentAbort = new AbortController();
+
     const res = await fetch(url, {
-      method: 'POST',
+      method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body:    JSON.stringify(body),
+      signal:  currentAbort.signal,
     });
 
     if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
+      throw new Error(`Server error ${res.status}`);
     }
 
     const reader  = res.body.getReader();
@@ -94,68 +134,49 @@ const App = (() => {
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
-      buffer = lines.pop();
+      buffer = lines.pop() ?? '';
 
       for (const line of lines) {
         if (line.startsWith('data: ')) {
-          try {
-            handleEvent(JSON.parse(line.slice(6)));
-          } catch (_) {}
+          try { handleEvent(JSON.parse(line.slice(6))); } catch (_) {}
         }
       }
     }
   }
 
-  // ── Handle a single SSE event ─────────────────────────────────────────────
+  // ── Event router ─────────────────────────────────────────────────────────
   function handleEvent(ev) {
     switch (ev.type) {
-      case 'tool_start':
-        onToolStart(ev.tool, ev.input);
-        break;
-
-      case 'tool_end':
-        onToolEnd(ev.tool);
-        break;
-
-      case 'token':
-        onToken(ev.content);
-        break;
-
-      case 'approval_required':
-        pendingApproval = ev;
-        showApprovalModal(ev);
-        break;
-
-      case 'done':
-        onDone(ev.content);
-        break;
-
-      case 'error':
-        appendSystemMessage('Agent error: ' + ev.message);
-        break;
+      case 'tool_start':      onToolStart(ev.tool);       break;
+      case 'tool_end':        onToolEnd(ev.tool);         break;
+      case 'token':           onToken(ev.content);        break;
+      case 'approval_required': pendingApproval = ev; showApprovalModal(ev); break;
+      case 'done':            onDone(ev.content);         break;
+      case 'error':           appendSystemMessage('Agent error: ' + (ev.message || 'unknown')); break;
     }
   }
 
   // ── Tool events ───────────────────────────────────────────────────────────
-  function onToolStart(tool, input) {
+  function onToolStart(tool) {
     activeTools.add(tool);
-    const meta = TOOL_META[tool] || { label: tool, color: 'blue', icon: '⚙️' };
+    const meta = TOOL_META[tool] || { label: tool, color: 'blue', icon: '&#x2699;' };
 
-    // Sidebar log entry
+    // Sidebar
+    const existing = document.getElementById('tool-entry-' + tool);
+    if (existing) existing.remove();
     const entry = document.createElement('div');
-    entry.id = 'tool-' + tool;
-    entry.className = `flex items-center gap-2 py-1.5 px-2 rounded-lg bg-slate-800`;
-    entry.innerHTML = `
-      <span class="animate-pulse w-1.5 h-1.5 rounded-full bg-${meta.color === 'amber' ? 'amber' : meta.color}-400"></span>
-      <span class="text-slate-300">${meta.icon} ${meta.label}</span>
-    `;
+    entry.id = 'tool-entry-' + tool;
+    entry.className = 'flex items-center gap-2 py-1.5 px-2 rounded-lg bg-slate-800';
+    entry.innerHTML =
+      `<span class="tool-dot-${tool} animate-pulse w-1.5 h-1.5 rounded-full bg-${meta.color === 'amber' ? 'amber' : meta.color}-400 flex-shrink-0"></span>` +
+      `<span class="text-slate-300">${meta.icon} ${escapeHtml(meta.label)}</span>`;
     document.getElementById('tool-log').prepend(entry);
 
-    // Inline badge in chat
+    // Inline badge
     ensureAgentBubble();
     const badge = document.createElement('span');
     badge.className = `tool-badge inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border mr-1 mb-1 ${TOOL_COLORS[meta.color] || TOOL_COLORS.blue}`;
-    badge.textContent = `${meta.icon} ${meta.label}`;
+    badge.innerHTML = `${meta.icon} ${escapeHtml(meta.label)}`;
     currentAgentEl.querySelector('.tool-badges').appendChild(badge);
 
     setStatus(`Running ${meta.label}…`);
@@ -163,9 +184,10 @@ const App = (() => {
 
   function onToolEnd(tool) {
     activeTools.delete(tool);
-    const entry = document.getElementById('tool-' + tool);
-    if (entry) {
-      entry.querySelector('span:first-child').className = 'w-1.5 h-1.5 rounded-full bg-green-400';
+    const dot = document.querySelector('.tool-dot-' + tool);
+    if (dot) {
+      dot.classList.remove('animate-pulse');
+      dot.className = 'w-1.5 h-1.5 rounded-full bg-green-400 flex-shrink-0';
     }
     if (activeTools.size === 0) setStatus('Thinking…');
   }
@@ -174,8 +196,10 @@ const App = (() => {
   function onToken(content) {
     ensureAgentBubble();
     currentAgentText += content;
-    currentAgentEl.querySelector('.agent-body').innerHTML =
-      marked.parse(currentAgentText);
+    try {
+      const html = DOMPurify.sanitize(marked.parse(currentAgentText));
+      currentAgentEl.querySelector('.agent-body').innerHTML = html;
+    } catch (_) {}
     scrollToBottom();
   }
 
@@ -183,11 +207,18 @@ const App = (() => {
   function onDone(content) {
     if (content && !currentAgentText) {
       ensureAgentBubble();
-      currentAgentText = content;
-      currentAgentEl.querySelector('.agent-body').innerHTML =
-        marked.parse(content);
+      try {
+        const html = DOMPurify.sanitize(marked.parse(content));
+        currentAgentEl.querySelector('.agent-body').innerHTML = html;
+      } catch (_) {
+        currentAgentEl.querySelector('.agent-body').textContent = content;
+      }
     }
-    currentAgentEl  = null;
+    if (currentAgentEl) {
+      const body = currentAgentEl.querySelector('.agent-body');
+      if (body) body.classList.add('done');
+    }
+    currentAgentEl   = null;
     currentAgentText = '';
     setStatus('Ready');
     scrollToBottom();
@@ -197,10 +228,11 @@ const App = (() => {
 
   // ── Approval modal ────────────────────────────────────────────────────────
   function showApprovalModal(ev) {
-    document.getElementById('modal-url').textContent  = ev.url   || '';
-    document.getElementById('modal-task').textContent = ev.task  || '';
+    document.getElementById('modal-url').textContent  = ev.url  || '';
+    document.getElementById('modal-task').textContent = ev.task || '';
     document.getElementById('modal-edit').value       = '';
     document.getElementById('approval-modal').classList.remove('hidden');
+    document.getElementById('modal-edit').focus();
     setStatus('Waiting for approval…');
   }
 
@@ -209,19 +241,15 @@ const App = (() => {
     if (!pendingApproval) return;
 
     const editVal = document.getElementById('modal-edit').value.trim();
-    const body = {
-      decision,
-      task: editVal || pendingApproval.task || '',
-    };
-
-    const tid = pendingApproval.thread_id;
+    const body = { decision, task: editVal || pendingApproval.task || '' };
+    const tid  = pendingApproval.thread_id;
     pendingApproval = null;
     setBusy(true);
 
     try {
-      await streamRequest(`/api/approve/${tid}`, body);
+      await streamRequest(`/api/approve/${encodeURIComponent(tid)}`, body);
     } catch (err) {
-      appendSystemMessage('Error resuming: ' + err.message);
+      if (err.name !== 'AbortError') appendSystemMessage('Error resuming: ' + err.message);
     } finally {
       setBusy(false);
     }
@@ -230,17 +258,14 @@ const App = (() => {
   // ── DOM helpers ───────────────────────────────────────────────────────────
   function hideWelcome() {
     const w = document.getElementById('welcome');
-    if (w) w.style.display = 'none';
+    if (w) w.remove();
   }
 
   function appendUserMessage(text) {
     const el = document.createElement('div');
     el.className = 'flex justify-end';
-    el.innerHTML = `
-      <div class="max-w-xl bg-brand-600 text-white px-4 py-3 rounded-2xl rounded-tr-sm text-sm leading-relaxed shadow-sm">
-        ${escapeHtml(text)}
-      </div>
-    `;
+    el.innerHTML =
+      `<div class="max-w-xl bg-brand-600 text-white px-4 py-3 rounded-2xl rounded-tr-sm text-sm leading-relaxed shadow-sm whitespace-pre-wrap break-words">${escapeHtml(text)}</div>`;
     document.getElementById('chat').appendChild(el);
     scrollToBottom();
     msgCount++;
@@ -251,13 +276,12 @@ const App = (() => {
     if (currentAgentEl) return;
     const el = document.createElement('div');
     el.className = 'flex items-start gap-3';
-    el.innerHTML = `
-      <div class="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center text-brand-600 font-bold text-xs flex-shrink-0 mt-1">AI</div>
-      <div class="flex-1 min-w-0">
-        <div class="tool-badges flex flex-wrap mb-2"></div>
-        <div class="agent-body prose prose-sm max-w-none text-slate-800 bg-white rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm border border-slate-100 leading-relaxed"></div>
-      </div>
-    `;
+    el.innerHTML =
+      `<div class="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center text-brand-600 font-bold text-xs flex-shrink-0 mt-1" aria-hidden="true">AI</div>` +
+      `<div class="flex-1 min-w-0">` +
+        `<div class="tool-badges flex flex-wrap mb-2"></div>` +
+        `<div class="agent-body prose prose-sm max-w-none text-slate-800 bg-white rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm border border-slate-100 leading-relaxed"></div>` +
+      `</div>`;
     document.getElementById('chat').appendChild(el);
     currentAgentEl = el;
     scrollToBottom();
@@ -273,26 +297,23 @@ const App = (() => {
 
   function setBusy(val) {
     busy = val;
-    const btn = document.getElementById('send-btn');
-    const inp = document.getElementById('input');
-    btn.disabled = val;
-    inp.disabled = val;
+    document.getElementById('send-btn').disabled = val;
+    document.getElementById('input').disabled    = val;
     if (val) setStatus('Thinking…');
   }
 
   function setStatus(text) {
-    document.getElementById('header-status').innerHTML = `
-      <span class="w-1.5 h-1.5 rounded-full ${busy ? 'bg-amber-400 animate-pulse' : 'bg-green-400'}"></span>
-      ${escapeHtml(text)}
-    `;
+    const dot = busy
+      ? '<span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>'
+      : '<span class="w-1.5 h-1.5 rounded-full bg-green-400"></span>';
+    document.getElementById('header-status').innerHTML = `${dot} ${escapeHtml(text)}`;
   }
 
   function scrollToBottom() {
     const chat = document.getElementById('chat');
-    chat.scrollTop = chat.scrollHeight;
+    requestAnimationFrame(() => { chat.scrollTop = chat.scrollHeight; });
   }
 
-  // ── Input helpers ─────────────────────────────────────────────────────────
   function onKey(e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   }
@@ -303,14 +324,16 @@ const App = (() => {
   }
 
   function suggest(btn) {
-    document.getElementById('input').value = btn.textContent.trim().replace(/^[^ ]+ /, '');
+    const text = btn.textContent.trim();
+    document.getElementById('input').value = text;
+    autoResize(document.getElementById('input'));
     send();
   }
 
   function escapeHtml(s) {
     return String(s)
-      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
   init();
